@@ -65,12 +65,21 @@ for (let row = 0; row < 2; row++) for (let i = 0; i < 5; i++) {
   });
 }
 
-// ---------- sound (tiny synth, no audio files) ----------
-let audio = null, muted = false;
+// ---------- sound (all synthesised in the browser, no audio files) ----------
+let audio = null, master = null, noiseBuf = null, muted = false;
 function initAudio() {
-  if (audio) return;
-  try { audio = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { audio = null; }
+  if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
+  try {
+    audio = new (window.AudioContext || window.webkitAudioContext)();
+    const comp = audio.createDynamicsCompressor();      // stops loud moments from crackling
+    master = audio.createGain(); master.gain.value = 0.9;
+    master.connect(comp).connect(audio.destination);
+    noiseBuf = audio.createBuffer(1, audio.sampleRate, audio.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  } catch (e) { audio = null; }
 }
+// simple beep, used for the small arcade blips
 function tone(freq, dur, type = 'square', vol = 0.08, slideTo = null, delay = 0) {
   if (!audio || muted) return;
   const t = audio.currentTime + delay;
@@ -79,20 +88,96 @@ function tone(freq, dur, type = 'square', vol = 0.08, slideTo = null, delay = 0)
   if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
   g.gain.setValueAtTime(vol, t);
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g).connect(audio.destination);
+  o.connect(g).connect(master);
   o.start(t); o.stop(t + dur + 0.02);
 }
+// burst of filtered hiss: the breath in a bark, the splat in a poop
+function noise(dur, freq, q, vol, delay = 0, type = 'bandpass', slideTo = null) {
+  if (!audio || muted) return;
+  const t = audio.currentTime + delay;
+  const s = audio.createBufferSource(), f = audio.createBiquadFilter(), g = audio.createGain();
+  s.buffer = noiseBuf; s.loop = true;
+  f.type = type; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
+  if (slideTo) f.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f).connect(g).connect(master);
+  s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.02);
+}
+// one big-dog "WOOF": a growly voice dropping in pitch, shaped by two mouth resonances
+function woof(delay = 0, pitch = 1, vol = 1) {
+  if (!audio || muted) return;
+  const t = audio.currentTime + delay, dur = 0.19;
+  const o = audio.createOscillator(), o2 = audio.createOscillator(), env = audio.createGain();
+  o.type = 'sawtooth'; o2.type = 'square';
+  for (const [osc, mul] of [[o, 1], [o2, 0.5]]) {
+    osc.frequency.setValueAtTime(150 * pitch * mul, t);
+    osc.frequency.exponentialRampToValueAtTime(330 * pitch * mul, t + 0.03);
+    osc.frequency.exponentialRampToValueAtTime(95 * pitch * mul, t + dur);
+  }
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.55 * vol, t + 0.015);
+  env.gain.setValueAtTime(0.5 * vol, t + 0.07);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  for (const [freq, q, gain] of [[520, 3, 1], [1150, 4, 0.55]]) {
+    const f = audio.createBiquadFilter(), g = audio.createGain();
+    f.type = 'bandpass'; f.Q.value = q; g.gain.value = gain;
+    f.frequency.setValueAtTime(freq * 0.7, t);
+    f.frequency.exponentialRampToValueAtTime(freq * 1.25, t + 0.04);   // mouth opening
+    f.frequency.exponentialRampToValueAtTime(freq * 0.75, t + dur);    // and closing
+    o.connect(f); o2.connect(f); f.connect(g).connect(env);
+  }
+  env.connect(master);
+  o.start(t); o2.start(t); o.stop(t + dur + 0.02); o2.stop(t + dur + 0.02);
+  noise(0.12, 900, 1.2, 0.22 * vol, delay);                            // the huff of air
+}
+// a rasp: low buzz chopped by a flappy wobble, with a wet splatter on top
+function parp(dur, pitch = 80, vol = 0.5, delay = 0, endPitch = null, wet = 0.5) {
+  if (!audio || muted) return;
+  const t = audio.currentTime + delay;
+  const o = audio.createOscillator(), lp = audio.createBiquadFilter();
+  const chop = audio.createGain(), lfo = audio.createOscillator(), depth = audio.createGain(), env = audio.createGain();
+  o.type = 'sawtooth';
+  o.frequency.setValueAtTime(pitch, t);
+  o.frequency.linearRampToValueAtTime(pitch * 1.25, t + dur * 0.3);
+  o.frequency.exponentialRampToValueAtTime(endPitch || pitch * 0.6, t + dur);
+  lp.type = 'lowpass'; lp.Q.value = 5;
+  lp.frequency.setValueAtTime(900, t); lp.frequency.exponentialRampToValueAtTime(260, t + dur);
+  lfo.type = 'square';                                                 // the flap
+  lfo.frequency.setValueAtTime(rand(26, 34), t);
+  lfo.frequency.linearRampToValueAtTime(rand(11, 17), t + dur);        // slows as it runs out of puff
+  chop.gain.value = 0.55; depth.gain.value = 0.45;
+  lfo.connect(depth).connect(chop.gain);
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(vol, t + 0.02);
+  env.gain.setValueAtTime(vol, t + dur * 0.7);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(lp).connect(chop).connect(env).connect(master);
+  o.start(t); lfo.start(t); o.stop(t + dur + 0.02); lfo.stop(t + dur + 0.02);
+  if (wet) noise(dur * 0.9, 1400, 0.8, vol * wet * 0.5, delay, 'bandpass', 500);
+}
 const sfx = {
-  bark()    { tone(300, 0.11, 'sawtooth', 0.13, 150); tone(340, 0.13, 'sawtooth', 0.13, 140, 0.13); },
-  whimper() { tone(700, 0.25, 'sine', 0.06, 420); },
-  cheese()  { tone(660, 0.07, 'square', 0.06); tone(880, 0.09, 'square', 0.06, null, 0.07); },
-  pigeon()  { tone(900, 0.06, 'triangle', 0.05, 1300); },
-  bowl()    { tone(180, 0.25, 'square', 0.1, 60); tone(520, 0.1, 'triangle', 0.06, 900, 0.05); },
-  thwack()  { tone(120, 0.18, 'sawtooth', 0.12, 50); },
+  bark()    { woof(0, rand(0.95, 1.05)); woof(0.21, rand(0.84, 0.92), 0.9); },
+  whimper() { tone(780, 0.16, 'sine', 0.07, 560); tone(700, 0.3, 'sine', 0.07, 400, 0.17); },
+  cheese()  { tone(660, 0.07, 'square', 0.06); tone(880, 0.09, 'square', 0.06, null, 0.07); noise(0.07, 2400, 2, 0.07); },
+  pigeon()  { for (let i = 0; i < 3; i++) noise(0.05, 2600, 3, 0.09, i * 0.055); tone(900, 0.06, 'triangle', 0.04, 1300); },
+  bowl()    { noise(0.16, 260, 1, 0.5, 0, 'lowpass'); tone(180, 0.25, 'square', 0.09, 60); tone(520, 0.12, 'triangle', 0.06, 1000, 0.05); },
+  thwack()  { noise(0.09, 1800, 1.5, 0.4); tone(120, 0.18, 'sawtooth', 0.12, 50); },
   letter()  { tone(330, 0.18, 'triangle', 0.09, 220); tone(220, 0.3, 'triangle', 0.09, 150, 0.18); },
-  trots()   { for (let i = 0; i < 6; i++) tone(rand(55, 90), 0.22, 'sawtooth', 0.14, rand(35, 50), i * 0.09); tone(200, 0.6, 'square', 0.05, 900, 0.1); },
-  queasy()  { tone(260, 0.5, 'sine', 0.07, 110); },
-  over()    { tone(392, 0.2, 'triangle', 0.1); tone(330, 0.2, 'triangle', 0.1, null, 0.22); tone(262, 0.5, 'triangle', 0.1, null, 0.44); },
+  // the main event: a tummy gurgle, then an almighty eruption, a rising whistle and a few aftershocks
+  trots() {
+    tone(90, 0.28, 'sine', 0.3, 170); tone(150, 0.2, 'sine', 0.2, 80, 0.12);
+    parp(1.15, 105, 0.75, 0.3, 42, 0.9);
+    noise(0.5, 300, 0.7, 0.45, 0.3, 'lowpass', 90);
+    tone(240, 0.8, 'square', 0.035, 1200, 0.4);
+    parp(0.22, 130, 0.5, 1.5, 85, 0.7); parp(0.16, 150, 0.4, 1.78, 100, 0.6);
+  },
+  // little squits that keep coming while the turbo lasts
+  squit()   { parp(rand(0.09, 0.2), rand(80, 150), rand(0.22, 0.36), 0, null, rand(0.5, 1)); },
+  // the last sad deflating toot as the turbo runs out
+  queasy()  { parp(0.75, 120, 0.4, 0, 38, 0.3); tone(260, 0.5, 'sine', 0.06, 110, 0.5); },
+  over()    { tone(392, 0.2, 'triangle', 0.1); tone(330, 0.2, 'triangle', 0.1, null, 0.22); tone(262, 0.5, 'triangle', 0.1, null, 0.44); woof(0.95, 0.7, 0.7); },
 };
 
 // ---------- input ----------
@@ -238,7 +323,7 @@ function takeOff(b, byMo) {
 }
 function startTrots() {
   const mo = G.mo;
-  mo.state = 'turbo'; mo.stateT = CFG.turboTime; mo.gut = 0; mo.dazed = 0;
+  mo.state = 'turbo'; mo.stateT = CFG.turboTime; mo.gut = 0; mo.dazed = 0; mo.squitT = 1.9;
   G.stats.trots++; G.shake = 12;
   sfx.trots();
   popup(mo.x, mo.y - 70, 'TURBO TROTS!', '#ffd23f', 34);
@@ -271,6 +356,8 @@ function update(dt) {
   // --- Mo's digestive journey ---
   if (mo.state === 'turbo') {
     mo.stateT -= dt; mo.trailT -= dt;
+    mo.squitT -= dt;
+    if (mo.squitT <= 0) { mo.squitT = rand(0.16, 0.42); sfx.squit(); }
     if (mo.trailT <= 0) {
       mo.trailT = 0.05;
       G.puddles.push({ x: mo.x - mo.dir * 26 + rand(-5, 5), y: mo.y + 16 + rand(-5, 5), life: 5, r: rand(9, 15) });
