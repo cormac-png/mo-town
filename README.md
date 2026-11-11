@@ -4,7 +4,9 @@ A small desktop browser game about Mo, a Bernese mountain dog with a cheese prob
 
 ## Play
 
-Double-click `index.html`. No install, no build, no internet needed.
+Play online at https://cormac-png.github.io/mo-town/
+
+Or download the repo and double-click `index.html`. No install or build needed. Keep the `sounds` folder next to it. Opened straight from disk, some browsers will not load the recordings, and the game uses built-in synthesised sounds instead.
 
 | Key | What it does |
 | --- | --- |
@@ -22,3 +24,18 @@ Double-click `index.html`. No install, no build, no internet needed.
 ## Tweaking
 
 Everything is in `index.html`. The `CFG` block near the top holds the balance numbers (speeds, timings, how many cheeses trigger the trots, how many letters end the game).
+
+## Sounds
+
+Recordings live in `sounds/`. Each is optional; delete one and the game falls back to a synthesised version.
+
+| File | Plays when |
+| --- | --- |
+| `bark.mp3` | Mo barks (Space) |
+| `scream.mp3` | A postman is bowled over |
+| `powerup.mp3` | The Turbo Trots start |
+| `farts.mp3` | Six sounds in one file: the big one at the start of the Turbo Trots, the small ones while it lasts |
+
+To swap one, replace the file and keep the name. If you replace `farts.mp3`, update the `FARTS` timings near the top of the sound code in `index.html`.
+
+`farts.mp3` and `powerup.mp3` are from Epidemic Sound and are used under licence; they are not free to reuse.

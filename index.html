@@ -67,6 +67,40 @@ for (let row = 0; row < 2; row++) for (let i = 0; i < 5; i++) {
 
 // ---------- sound (all synthesised in the browser, no audio files) ----------
 let audio = null, master = null, noiseBuf = null, muted = false;
+
+// Recorded sounds live in the sounds/ folder. Each one is optional: if a file is missing or
+// cannot be loaded (for example when index.html is opened straight from disk in some browsers),
+// the game quietly falls back to the synthesised version of that sound.
+const CLIP_FILES = { bark: 'sounds/bark.mp3', farts: 'sounds/farts.mp3', scream: 'sounds/scream.mp3', powerup: 'sounds/powerup.mp3' };
+// farts.mp3 holds six separate sounds; these are their [start, length] in seconds
+const FARTS = [[0, 0.24], [0.53, 0.27], [1.08, 0.43], [1.87, 0.24], [2.4, 0.73], [3.72, 0.19]];
+const BIG_FART = 4, LITTLE_FARTS = [0, 1, 2, 3, 5];
+const clipData = {}, clips = {};
+for (const [name, url] of Object.entries(CLIP_FILES)) {
+  fetch(url).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); })
+    .then(data => { clipData[name] = data; decodeClips(); })
+    .catch(() => { /* no file: the synth version is used instead */ });
+}
+function decodeClips() {
+  if (!audio) return;                                  // decoding waits until the sound engine exists
+  for (const name of Object.keys(clipData)) {
+    const data = clipData[name]; delete clipData[name];
+    audio.decodeAudioData(data, buf => { clips[name] = buf; }, () => { /* unreadable file: synth instead */ });
+  }
+}
+// play a recorded clip (or a slice of one); returns false if it is not available
+function clip(name, { offset = 0, dur = null, vol = 1, rate = 1, delay = 0 } = {}) {
+  if (!audio || muted || !clips[name]) return false;
+  const t = audio.currentTime + delay;
+  const s = audio.createBufferSource(), g = audio.createGain();
+  s.buffer = clips[name]; s.playbackRate.value = rate; g.gain.value = vol;
+  s.connect(g).connect(master);
+  if (dur) { s.start(t, offset, dur); g.gain.setValueAtTime(vol, t + dur / rate - 0.02); g.gain.linearRampToValueAtTime(0, t + dur / rate); }
+  else s.start(t, offset);
+  return true;
+}
+const fart = (i, opts = {}) => clip('farts', { offset: FARTS[i][0], dur: FARTS[i][1], ...opts });
+let lastScream = -9;
 function initAudio() {
   if (audio) { if (audio.state !== 'running') audio.resume(); return; }
   try {
@@ -78,6 +112,7 @@ function initAudio() {
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     if (audio.state !== 'running') audio.resume();   // some browsers start the sound engine paused
+    decodeClips();
   } catch (e) { audio = null; }
 }
 try { muted = localStorage.getItem('motown-muted') === '1'; } catch (e) { /* storage unavailable: fine */ }
@@ -86,7 +121,7 @@ function toggleMute() {
   try { localStorage.setItem('motown-muted', muted ? '1' : '0'); } catch (e) { /* fine */ }
   initAudio();
   if (master) master.gain.value = muted ? 0 : 0.9;   // also cuts off anything still playing
-  if (!muted) woof(0, 1, 0.8);                       // a woof to confirm the sound is back
+  if (!muted) sfx.bark();                            // a woof to confirm the sound is back
 }
 // 'on', 'off' (muted by the player) or 'blocked' (the browser has not let sound start yet)
 function soundStatus() {
@@ -172,15 +207,24 @@ function parp(dur, pitch = 80, vol = 0.5, delay = 0, endPitch = null, wet = 0.5)
   if (wet) noise(dur * 0.9, 1400, 0.8, vol * wet * 0.5, delay, 'bandpass', 500);
 }
 const sfx = {
-  bark()    { woof(0, rand(0.95, 1.05)); woof(0.21, rand(0.84, 0.92), 0.9); },
+  bark()    { if (!clip('bark', { rate: rand(0.94, 1.07), vol: 0.9 })) { woof(0, rand(0.95, 1.05)); woof(0.21, rand(0.84, 0.92), 0.9); } },
   whimper() { tone(780, 0.16, 'sine', 0.07, 560); tone(700, 0.3, 'sine', 0.07, 400, 0.17); },
   cheese()  { tone(660, 0.07, 'square', 0.06); tone(880, 0.09, 'square', 0.06, null, 0.07); noise(0.07, 2400, 2, 0.07); },
   pigeon()  { for (let i = 0; i < 3; i++) noise(0.05, 2600, 3, 0.09, i * 0.055); tone(900, 0.06, 'triangle', 0.04, 1300); },
-  bowl()    { noise(0.16, 260, 1, 0.5, 0, 'lowpass'); tone(180, 0.25, 'square', 0.09, 60); tone(520, 0.12, 'triangle', 0.06, 1000, 0.05); },
+  // a thud, then the postman's scream (spaced out so a row of skittled posties is not deafening)
+  bowl() {
+    noise(0.16, 260, 1, 0.5, 0, 'lowpass'); tone(180, 0.25, 'square', 0.09, 60);
+    const now = audio ? audio.currentTime : 0;
+    if (now - lastScream > 0.3 && clip('scream', { offset: 0.09, rate: rand(0.92, 1.15), vol: 0.9 })) lastScream = now;
+    else if (!clips.scream) tone(520, 0.12, 'triangle', 0.06, 1000, 0.05);
+  },
   thwack()  { noise(0.09, 1800, 1.5, 0.4); tone(120, 0.18, 'sawtooth', 0.12, 50); },
   letter()  { tone(330, 0.18, 'triangle', 0.09, 220); tone(220, 0.3, 'triangle', 0.09, 150, 0.18); },
   // the main event: a tummy gurgle, then an almighty eruption, a rising whistle and a few aftershocks
   trots() {
+    const jingle = clip('powerup', { vol: 1.7 });
+    if (fart(BIG_FART, { delay: 0.12, vol: 1 })) { fart(2, { delay: 0.95, vol: 0.8 }); return; }
+    if (jingle) { parp(1.15, 105, 0.75, 0.12, 42, 0.9); return; }
     tone(90, 0.28, 'sine', 0.3, 170); tone(150, 0.2, 'sine', 0.2, 80, 0.12);
     parp(1.15, 105, 0.75, 0.3, 42, 0.9);
     noise(0.5, 300, 0.7, 0.45, 0.3, 'lowpass', 90);
@@ -188,9 +232,9 @@ const sfx = {
     parp(0.22, 130, 0.5, 1.5, 85, 0.7); parp(0.16, 150, 0.4, 1.78, 100, 0.6);
   },
   // little squits that keep coming while the turbo lasts
-  squit()   { parp(rand(0.09, 0.2), rand(80, 150), rand(0.22, 0.36), 0, null, rand(0.5, 1)); },
+  squit()   { if (!fart(pick(LITTLE_FARTS), { rate: rand(0.85, 1.25), vol: rand(0.55, 0.8) })) parp(rand(0.09, 0.2), rand(80, 150), rand(0.22, 0.36), 0, null, rand(0.5, 1)); },
   // the last sad deflating toot as the turbo runs out
-  queasy()  { parp(0.75, 120, 0.4, 0, 38, 0.3); tone(260, 0.5, 'sine', 0.06, 110, 0.5); },
+  queasy()  { if (!fart(2, { rate: 0.62, vol: 0.8 })) parp(0.75, 120, 0.4, 0, 38, 0.3); tone(260, 0.5, 'sine', 0.06, 110, 0.5); },
   over()    { tone(392, 0.2, 'triangle', 0.1); tone(330, 0.2, 'triangle', 0.1, null, 0.22); tone(262, 0.5, 'triangle', 0.1, null, 0.44); woof(0.95, 0.7, 0.7); },
 };
 
@@ -353,7 +397,7 @@ function takeOff(b, byMo) {
 }
 function startTrots() {
   const mo = G.mo;
-  mo.state = 'turbo'; mo.stateT = CFG.turboTime; mo.gut = 0; mo.dazed = 0; mo.squitT = 1.9;
+  mo.state = 'turbo'; mo.stateT = CFG.turboTime; mo.gut = 0; mo.dazed = 0; mo.squitT = 1.5;
   G.stats.trots++; G.shake = 12;
   sfx.trots();
   popup(mo.x, mo.y - 70, 'TURBO TROTS!', '#ffd23f', 34);
