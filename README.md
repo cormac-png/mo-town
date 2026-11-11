@@ -11,7 +11,7 @@ Double-click `index.html`. No install, no build, no internet needed.
 | Arrow keys / WASD | Run about the park |
 | Space | Bark (stuns postmen, scatters pigeons) |
 | P | Pause |
-| M | Mute |
+| M, or the speaker button (bottom right) | Sound on / off |
 
 ## How it works
 

@@ -68,16 +68,30 @@ for (let row = 0; row < 2; row++) for (let i = 0; i < 5; i++) {
 // ---------- sound (all synthesised in the browser, no audio files) ----------
 let audio = null, master = null, noiseBuf = null, muted = false;
 function initAudio() {
-  if (audio) { if (audio.state === 'suspended') audio.resume(); return; }
+  if (audio) { if (audio.state !== 'running') audio.resume(); return; }
   try {
     audio = new (window.AudioContext || window.webkitAudioContext)();
     const comp = audio.createDynamicsCompressor();      // stops loud moments from crackling
-    master = audio.createGain(); master.gain.value = 0.9;
+    master = audio.createGain(); master.gain.value = muted ? 0 : 0.9;
     master.connect(comp).connect(audio.destination);
     noiseBuf = audio.createBuffer(1, audio.sampleRate, audio.sampleRate);
     const d = noiseBuf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    if (audio.state !== 'running') audio.resume();   // some browsers start the sound engine paused
   } catch (e) { audio = null; }
+}
+try { muted = localStorage.getItem('motown-muted') === '1'; } catch (e) { /* storage unavailable: fine */ }
+function toggleMute() {
+  muted = !muted;
+  try { localStorage.setItem('motown-muted', muted ? '1' : '0'); } catch (e) { /* fine */ }
+  initAudio();
+  if (master) master.gain.value = muted ? 0 : 0.9;   // also cuts off anything still playing
+  if (!muted) woof(0, 1, 0.8);                       // a woof to confirm the sound is back
+}
+// 'on', 'off' (muted by the player) or 'blocked' (the browser has not let sound start yet)
+function soundStatus() {
+  if (muted) return 'off';
+  return audio && audio.state === 'running' ? 'on' : 'blocked';
 }
 // simple beep, used for the small arcade blips
 function tone(freq, dur, type = 'square', vol = 0.08, slideTo = null, delay = 0) {
@@ -188,13 +202,29 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   initAudio();
   keys.add(k);
-  if (k === 'm') muted = !muted;
+  if (k === 'm') { toggleMute(); return; }
   if (G.mode === 'title' && (k === 'enter' || k === ' ')) { startGame(); return; }
   if (G.mode === 'over' && (k === 'enter' || k === ' ') && G.overT > 0.8) { startGame(); return; }
   if (G.mode === 'play' && k === 'p') G.paused = !G.paused;
   if (G.mode === 'play' && !G.paused && k === ' ') bark();
 });
 addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+
+// the speaker button in the bottom-right corner; a click anywhere also wakes the sound engine
+const SOUND_BTN = { x: W - 176, y: H - 40, w: 164, h: 30 };
+function canvasPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+const onSoundBtn = pt => pt.x >= SOUND_BTN.x && pt.x <= SOUND_BTN.x + SOUND_BTN.w && pt.y >= SOUND_BTN.y && pt.y <= SOUND_BTN.y + SOUND_BTN.h;
+addEventListener('pointerdown', e => {
+  const wasBlocked = soundStatus() === 'blocked';
+  initAudio();
+  const pt = canvasPoint(e);
+  if (onSoundBtn(pt)) { if (wasBlocked) woof(0.05, 1, 0.8); else toggleMute(); return; }
+  if (G.mode === 'title' || (G.mode === 'over' && G.overT > 0.8)) startGame();
+});
+canvas.addEventListener('pointermove', e => { canvas.style.cursor = onSoundBtn(canvasPoint(e)) ? 'pointer' : 'default'; });
 addEventListener('blur', () => keys.clear());
 
 // ---------- game state ----------
@@ -715,7 +745,26 @@ function drawHUD() {
     ctx.strokeStyle = on ? '#8d2a20' : 'rgba(255,255,255,.25)'; ctx.lineWidth = 1.5;
     ctx.beginPath(); ctx.moveTo(x + 1, 16); ctx.lineTo(x + 12, 25); ctx.lineTo(x + 23, 16); ctx.stroke();
   }
-  if (muted) label('muted', W - 20, H - 14, 12, '#fff', 'right', 700);
+}
+
+function drawSoundButton() {
+  const { x, y, w, h } = SOUND_BTN, st = soundStatus();
+  rrect(x, y, w, h, 15, st === 'blocked' ? 'rgba(150,60,30,.94)' : 'rgba(22,30,26,.9)');
+  // speaker icon
+  const ix = x + 20, iy = y + h / 2;
+  ctx.fillStyle = '#fff'; ctx.beginPath();
+  ctx.moveTo(ix - 8, iy - 4); ctx.lineTo(ix - 3, iy - 4); ctx.lineTo(ix + 3, iy - 9); ctx.lineTo(ix + 3, iy + 9); ctx.lineTo(ix - 3, iy + 4); ctx.lineTo(ix - 8, iy + 4); ctx.closePath(); ctx.fill();
+  ctx.lineWidth = 2; ctx.lineCap = 'round';
+  if (st === 'on') {
+    ctx.strokeStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ix + 4, iy, 5, -0.9, 0.9); ctx.stroke();
+    ctx.beginPath(); ctx.arc(ix + 4, iy, 9.5, -0.9, 0.9); ctx.stroke();
+  } else {
+    ctx.strokeStyle = st === 'off' ? '#ff6b6b' : '#ffd23f';
+    ctx.beginPath(); ctx.moveTo(ix + 7, iy - 5); ctx.lineTo(ix + 15, iy + 5); ctx.moveTo(ix + 15, iy - 5); ctx.lineTo(ix + 7, iy + 5); ctx.stroke();
+  }
+  const text = st === 'on' ? 'Sound on  (M)' : st === 'off' ? 'Sound off  (M)' : 'Click for sound';
+  label(text, x + 42, iy + 1, 13, st === 'off' ? '#ffb3b3' : '#fff', 'left', 800, null);
 }
 
 function drawWorld() {
@@ -778,8 +827,8 @@ function drawTitle() {
     label(k, 300, 338 + i * 27, 15, '#b5651d', 'right', 900, null);
     label(v, 316, 338 + i * 27, 15, '#2b2b2b', 'left', 600, null);
   });
-  if (Math.floor(G.t * 2) % 2) label('Press Enter or Space to play', W / 2, 518, 22, '#fff', 'center', 900, '#151515');
-  label('P pause · M mute', W / 2, 550, 13, '#6b5b47', 'center', 700, null);
+  if (Math.floor(G.t * 2) % 2) label('Press Enter or click to play', W / 2, 518, 22, '#fff', 'center', 900, '#151515');
+  label('P pause · M mute (or the speaker button, bottom right)', W / 2, 550, 13, '#6b5b47', 'center', 700, null);
 }
 
 function drawOver() {
@@ -795,7 +844,7 @@ function drawOver() {
     label(k, W / 2 + 40, 352 + i * 24, 15, '#2b2b2b', 'right', 600, null);
     label(String(v), W / 2 + 58, 352 + i * 24, 15, '#b5651d', 'left', 900, null);
   });
-  if (G.overT > 0.8 && Math.floor(G.t * 2) % 2) label('Press Enter to go again', W / 2, 468, 20, '#fff', 'center', 900, '#151515');
+  if (G.overT > 0.8 && Math.floor(G.t * 2) % 2) label('Press Enter or click to go again', W / 2, 468, 20, '#fff', 'center', 900, '#151515');
 }
 
 // ---------- main loop ----------
@@ -808,6 +857,7 @@ function frame(now) {
     drawWorld();
     if (G.paused) { ctx.fillStyle = 'rgba(16,24,20,.6)'; ctx.fillRect(0, 0, W, H); label('Paused', W / 2, H / 2, 48, '#fff'); label('P to carry on', W / 2, H / 2 + 44, 16, '#fff'); }
   } else { G.t += dt; G.overT += dt; drawOver(); }
+  drawSoundButton();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
