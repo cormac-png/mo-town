@@ -15,6 +15,8 @@ Or download the repo and double-click `index.html`. No install or build needed. 
 | P | Pause |
 | M, or the speaker button (bottom right) | Sound on / off |
 
+On a phone or tablet: drag anywhere on the left half of the screen to run, tap anywhere on the right half to bark. Small buttons above the WOOF button pause the game and switch the sound on or off. It plays best with the phone held sideways.
+
 ## How it works
 
 - **Postmen** walk in from the sides and try to reach a letterbox. Bark to stun one, then charge into him to bowl him over. Run into an un-stunned postman and you get a thwack from his newspaper. Five letters delivered and it is game over.

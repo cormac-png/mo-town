@@ -2,16 +2,49 @@
 <html lang="en-GB">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1d2b24">
 <title>Mo Town</title>
 <style>
   html, body { margin: 0; height: 100%; background: #1d2b24; overflow: hidden; }
-  body { display: flex; align-items: center; justify-content: center; }
+  body { display: flex; align-items: center; justify-content: center;
+         touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
+         -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
   canvas { display: block; background: #6fbf5a; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+
+  /* ---- touch controls: only shown on phones and tablets ---- */
+  .touch-ui { display: none; position: fixed; font-family: 'Trebuchet MS', 'Segoe UI', system-ui, sans-serif; }
+  body.touch.portrait { align-items: flex-start; }
+  body.touch.portrait canvas { margin-top: env(safe-area-inset-top); border-radius: 0; }
+  body.touch.playing .touch-ui.in-play, body.touch .touch-ui.always { display: flex; }
+  #stick { left: 0; top: 0; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; pointer-events: none;
+           border: 3px solid rgba(255,255,255,.35); background: rgba(255,255,255,.08); box-sizing: border-box;
+           align-items: center; justify-content: center; opacity: .55; }
+  #stick.active { opacity: 1; }
+  #knob { width: 54px; height: 54px; border-radius: 50%; background: rgba(255,255,255,.55); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+  #barkBtn { right: calc(22px + env(safe-area-inset-right)); bottom: calc(26px + env(safe-area-inset-bottom));
+             width: 104px; height: 104px; border-radius: 50%; pointer-events: none; align-items: center; justify-content: center;
+             background: rgba(255,210,63,.9); border: 4px solid #151515; box-sizing: border-box; color: #151515;
+             font-weight: 900; font-size: 22px; letter-spacing: .5px; box-shadow: 0 4px 0 #151515; transition: transform .08s; }
+  #barkBtn.hit { transform: translateY(4px) scale(.94); box-shadow: 0 0 0 #151515; }
+  #barkBtn.off { background: rgba(160,170,160,.6); }
+  .mini { right: calc(22px + env(safe-area-inset-right)); bottom: calc(146px + env(safe-area-inset-bottom));
+          width: 48px; height: 48px; border-radius: 50%; align-items: center; justify-content: center; padding: 0;
+          background: rgba(22,30,26,.9); border: 2px solid rgba(255,255,255,.4); color: #fff; font-size: 13px; font-weight: 800; }
+  #pauseBtn { right: calc(78px + env(safe-area-inset-right)); }
+  #turnHint { left: 0; right: 0; justify-content: center; color: rgba(255,255,255,.6); font-size: 13px; font-weight: 700; }
+  body.touch:not(.portrait) #turnHint { display: none; }
 </style>
 </head>
 <body>
 <canvas id="game" width="960" height="640"></canvas>
+<div id="stick" class="touch-ui in-play"><div id="knob"></div></div>
+<div id="barkBtn" class="touch-ui in-play">WOOF</div>
+<button id="muteBtn" class="touch-ui always mini" aria-label="Sound on or off"></button>
+<button id="pauseBtn" class="touch-ui in-play mini" aria-label="Pause">II</button>
+<div id="turnHint" class="touch-ui always">Turn your phone sideways for a bigger view</div>
 <script>
 'use strict';
 /* ============================================================
@@ -45,12 +78,28 @@ const pick = arr => arr[Math.floor(Math.random() * arr.length)];
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
+// touch mode switches on for phones and tablets, or the first time a finger touches the screen
+let touchMode = matchMedia('(pointer: coarse)').matches;
 function fitCanvas() {
-  const s = Math.min(innerWidth / W, innerHeight / H) * 0.97;
+  const portrait = innerHeight > innerWidth;
+  const s = Math.min(innerWidth / W, innerHeight / H) * (touchMode ? 1 : 0.97);
   canvas.style.width = Math.floor(W * s) + 'px';
   canvas.style.height = Math.floor(H * s) + 'px';
+  document.body.classList.toggle('touch', touchMode);
+  document.body.classList.toggle('portrait', touchMode && portrait);
+  if (touchMode) {
+    // in portrait the game sits at the top and the controls get the space underneath
+    document.getElementById('turnHint').style.top = (Math.floor(H * s) + 14) + 'px';
+    restStick();
+  }
 }
-addEventListener('resize', fitCanvas); fitCanvas();
+function restStick() {
+  const el = document.getElementById('stick');
+  el.style.left = '92px'; el.style.top = (innerHeight - 96) + 'px';
+  el.classList.remove('active');
+  document.getElementById('knob').style.transform = '';
+}
+addEventListener('resize', fitCanvas); addEventListener('orientationchange', () => setTimeout(fitCanvas, 200)); fitCanvas();
 
 // ---------- houses & letterboxes ----------
 const ROOFS = ['#c0503c', '#8a5a9e', '#3f7fae', '#d08a2e', '#5b8f4e'];
@@ -261,13 +310,54 @@ function canvasPoint(e) {
   return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
 }
 const onSoundBtn = pt => pt.x >= SOUND_BTN.x && pt.x <= SOUND_BTN.x + SOUND_BTN.w && pt.y >= SOUND_BTN.y && pt.y <= SOUND_BTN.y + SOUND_BTN.h;
+// ---- touch: drag anywhere on the left half to run, tap anywhere on the right half to bark ----
+const joy = { id: null, ox: 0, oy: 0, x: 0, y: 0 };      // x and y run from -1 to 1
+const JOY_RADIUS = 48, JOY_DEAD = 0.18;
+function moveJoy(e) {
+  let dx = e.clientX - joy.ox, dy = e.clientY - joy.oy;
+  const d = Math.hypot(dx, dy);
+  if (d > JOY_RADIUS) {                                   // let the stick follow a thumb that drifts
+    joy.ox += dx * (1 - JOY_RADIUS / d); joy.oy += dy * (1 - JOY_RADIUS / d);
+    dx = e.clientX - joy.ox; dy = e.clientY - joy.oy;
+  }
+  joy.x = dx / JOY_RADIUS; joy.y = dy / JOY_RADIUS;
+  const el = document.getElementById('stick');
+  el.style.left = joy.ox + 'px'; el.style.top = joy.oy + 'px'; el.classList.add('active');
+  document.getElementById('knob').style.transform = `translate(${dx}px, ${dy}px)`;
+}
+function endJoy(e) {
+  if (e.pointerId !== joy.id) return;
+  joy.id = null; joy.x = joy.y = 0; restStick();
+}
+addEventListener('pointermove', e => { if (e.pointerId === joy.id) moveJoy(e); });
+addEventListener('pointerup', endJoy); addEventListener('pointercancel', endJoy);
+addEventListener('contextmenu', e => e.preventDefault());
+// phones only let sound start from a finished tap, so wake the sound engine on these too
+addEventListener('touchend', initAudio); addEventListener('click', initAudio);
+
 addEventListener('pointerdown', e => {
   const wasBlocked = soundStatus() === 'blocked';
   initAudio();
+  if (e.pointerType !== 'mouse' && !touchMode) { touchMode = true; fitCanvas(); }
   const pt = canvasPoint(e);
-  if (onSoundBtn(pt)) { if (wasBlocked) woof(0.05, 1, 0.8); else toggleMute(); return; }
-  if (G.mode === 'title' || (G.mode === 'over' && G.overT > 0.8)) startGame();
+  if (!touchMode && onSoundBtn(pt)) { if (wasBlocked) woof(0.05, 1, 0.8); else toggleMute(); return; }
+  if (G.mode === 'title' || (G.mode === 'over' && G.overT > 0.8)) { startGame(); return; }
+  if (G.mode !== 'play') return;
+  if (G.paused) { G.paused = false; return; }
+  if (e.pointerType === 'mouse') return;
+  if (e.clientX < innerWidth / 2) {
+    if (joy.id === null) { joy.id = e.pointerId; joy.ox = e.clientX; joy.oy = e.clientY; moveJoy(e); }
+  } else {
+    bark();
+    const b = document.getElementById('barkBtn');
+    b.classList.add('hit'); setTimeout(() => b.classList.remove('hit'), 110);
+  }
 });
+for (const [id, action] of [['muteBtn', () => toggleMute()], ['pauseBtn', () => { if (G.mode === 'play') G.paused = !G.paused; }]]) {
+  document.getElementById(id).addEventListener('pointerdown', e => { e.stopPropagation(); e.preventDefault(); initAudio(); action(); });
+}
+// pause automatically if the player switches app or the phone locks
+document.addEventListener('visibilitychange', () => { if (document.hidden && G.mode === 'play') { G.paused = true; keys.clear(); joy.id = null; joy.x = joy.y = 0; } });
 canvas.addEventListener('pointermove', e => { canvas.style.cursor = onSoundBtn(canvasPoint(e)) ? 'pointer' : 'default'; });
 addEventListener('blur', () => keys.clear());
 
@@ -418,11 +508,13 @@ function update(dt) {
   mo.barkCd -= dt; mo.immune -= dt;
   if (mo.dazed > 0) { mo.dazed -= dt; dx = dy = 0; mo.x += mo.kx * dt; mo.y += mo.ky * dt; mo.kx *= 0.9; mo.ky *= 0.9; }
   const speed = mo.state === 'turbo' ? CFG.turboSpeed : mo.state === 'queasy' ? CFG.queasySpeed : CFG.moSpeed;
+  if (joy.id !== null && mo.dazed <= 0 && Math.hypot(joy.x, joy.y) > JOY_DEAD) { dx = joy.x; dy = joy.y; }
   const len = Math.hypot(dx, dy);
   mo.moving = len > 0;
   if (len) {
-    mo.x += dx / len * speed * dt; mo.y += dy / len * speed * dt;
-    if (dx) mo.dir = dx > 0 ? 1 : -1;
+    const push = Math.min(1, len);                        // a gentle push on the stick walks, a full push runs
+    mo.x += dx / len * speed * push * dt; mo.y += dy / len * speed * push * dt;
+    if (Math.abs(dx) > 0.15) mo.dir = dx > 0 ? 1 : -1;
     mo.phase += dt * (mo.state === 'turbo' ? 26 : mo.state === 'queasy' ? 7 : 14);
   }
   mo.x = clamp(mo.x, 34, W - 34); mo.y = clamp(mo.y, TOP + 22, BOTTOM - 24);
@@ -860,8 +952,8 @@ function drawTitle() {
   label('One Bernese. Too much cheese. No post today.', W / 2, 180, 18, '#4a3b2a', 'center', 700, null);
   drawMo(W / 2 - 8, 262, 1, G.t * 10, 'normal', true, 1.7);
   const rows = [
-    ['Arrow keys / WASD', 'Run about the park'],
-    ['Space', 'Bark: stuns postmen, then charge in to bowl them over'],
+    touchMode ? ['Left thumb', 'Drag anywhere on the left to run about the park'] : ['Arrow keys / WASD', 'Run about the park'],
+    touchMode ? ['Right thumb', 'Tap to bark: stuns postmen, then charge in to bowl them over'] : ['Space', 'Bark: stuns postmen, then charge in to bowl them over'],
     ['Cheese', 'Five wedges fill the Gut-o-meter → TURBO TROTS (fast, ×2 points)'],
     ['...then', 'A queasy tummy: slow and no barking. Time your cheese!'],
     ['Pigeons', 'Chase them off before they scoff your cheese'],
@@ -871,8 +963,8 @@ function drawTitle() {
     label(k, 300, 338 + i * 27, 15, '#b5651d', 'right', 900, null);
     label(v, 316, 338 + i * 27, 15, '#2b2b2b', 'left', 600, null);
   });
-  if (Math.floor(G.t * 2) % 2) label('Press Enter or click to play', W / 2, 518, 22, '#fff', 'center', 900, '#151515');
-  label('P pause · M mute (or the speaker button, bottom right)', W / 2, 550, 13, '#6b5b47', 'center', 700, null);
+  if (Math.floor(G.t * 2) % 2) label(touchMode ? 'Tap to play' : 'Press Enter or click to play', W / 2, 518, 22, '#fff', 'center', 900, '#151515');
+  label(touchMode ? 'Best played with your phone sideways' : 'P pause · M mute (or the speaker button, bottom right)', W / 2, 550, 13, '#6b5b47', 'center', 700, null);
 }
 
 function drawOver() {
@@ -888,7 +980,22 @@ function drawOver() {
     label(k, W / 2 + 40, 352 + i * 24, 15, '#2b2b2b', 'right', 600, null);
     label(String(v), W / 2 + 58, 352 + i * 24, 15, '#b5651d', 'left', 900, null);
   });
-  if (G.overT > 0.8 && Math.floor(G.t * 2) % 2) label('Press Enter or click to go again', W / 2, 468, 20, '#fff', 'center', 900, '#151515');
+  if (G.overT > 0.8 && Math.floor(G.t * 2) % 2) label(touchMode ? 'Tap to go again' : 'Press Enter or click to go again', W / 2, 468, 20, '#fff', 'center', 900, '#151515');
+}
+
+// keeps the on-screen touch buttons in step with the game (only touches the page when something changes)
+let uiState = '';
+function syncTouchUI() {
+  const playing = G.mode === 'play' && !G.paused, st = soundStatus();
+  const canBark = playing && G.mo.state !== 'queasy';
+  const state = playing + st + canBark;
+  if (state === uiState) return;
+  uiState = state;
+  document.body.classList.toggle('playing', playing);
+  document.getElementById('barkBtn').classList.toggle('off', !canBark);
+  const m = document.getElementById('muteBtn');
+  m.textContent = st === 'off' ? 'OFF' : 'SND';        // before the first tap sound is merely waiting, not off
+  m.style.color = st === 'off' ? '#ff8f8f' : '#fff';
 }
 
 // ---------- main loop ----------
@@ -899,9 +1006,9 @@ function frame(now) {
   else if (G.mode === 'play') {
     if (!G.paused) update(dt);
     drawWorld();
-    if (G.paused) { ctx.fillStyle = 'rgba(16,24,20,.6)'; ctx.fillRect(0, 0, W, H); label('Paused', W / 2, H / 2, 48, '#fff'); label('P to carry on', W / 2, H / 2 + 44, 16, '#fff'); }
+    if (G.paused) { ctx.fillStyle = 'rgba(16,24,20,.6)'; ctx.fillRect(0, 0, W, H); label('Paused', W / 2, H / 2, 48, '#fff'); label(touchMode ? 'Tap to carry on' : 'P to carry on', W / 2, H / 2 + 44, 16, '#fff'); }
   } else { G.t += dt; G.overT += dt; drawOver(); }
-  drawSoundButton();
+  if (touchMode) syncTouchUI(); else drawSoundButton();
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
